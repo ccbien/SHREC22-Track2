@@ -1,9 +1,6 @@
-from ast import arg
 import random
-from matplotlib.pyplot import axes
 import numpy as np
 import open3d as o3d
-from torch import rand
 
 from utils import get_angles
 
