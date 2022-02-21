@@ -5,16 +5,6 @@ from scipy import optimize  # type: ignore
 import geom3d
 
 
-def centroid_fit(points, weights=None):
-    """Calculates the weighted average of a set of points
-    This minimizes the sum of the squared distances between the points
-    and the centroid.
-    """
-    if points.ndim == 1:
-        return points
-    return np.average(points, axis=0, weights=weights)
-
-
 def _check_input(points, weights) -> None:
     """Check the input data of the fit functionality"""
     points = np.asarray(points)
