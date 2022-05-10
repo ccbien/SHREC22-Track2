@@ -1,81 +1,15 @@
-import numpy as np
 import random
-
-def get_rotationMatrix_from_vectors(u, v):
-    """
-    Create a rotation matrix that rotates the space from a 3D vector `u` to a 3D vector `v`
-
-    :param u: Orign vector `np.array (1,3)`.
-    :param v: Destiny vector `np.array (1,3)`.
-
-    :returns: Rotation matrix `np.array (3, 3)`
-
-    ---
-    """
-
-    # Lets find a vector which is ortogonal to both u and v
-    w = np.cross(u, v)
-
-    # This orthogonal vector w has some interesting proprieties
-    # |w| = sin of the required rotation
-    # dot product of w and goal_normal_plane is the cos of the angle
-    c = np.dot(u, v)
-    s = np.linalg.norm(w)
-
-    # Now, we compute rotation matrix from rodrigues formula
-    # https://en.wikipedia.org/wiki/Rodrigues%27_rotation_formula
-    # https://math.stackexchange.com/questions/180418/calculate-rotation-matrix-to-align-vector-a-to-vector-b-in-3d
-
-    # We calculate the skew symetric matrix of the ort_vec
-    Sx = np.asarray([[0, -w[2], w[1]], [w[2], 0, -w[0]], [-w[1], w[0], 0]])
-    R = np.eye(3) + Sx + Sx.dot(Sx) * ((1 - c) / (s ** 2))
-    return R
-
-
-def rodrigues_rot(P, n0, n1):
-    """
-    Rotate a set of point between two normal vectors using Rodrigues' formula.
-
-    :param P: Set of points `np.array (N,3)`.
-    :param n0: Orign vector `np.array (1,3)`.
-    :param n1: Destiny vector `np.array (1,3)`.
-
-    :returns: Set of points P, but rotated `np.array (N, 3)`
-
-    ---
-    """
-
-    # If P is only 1d array (coords of single point), fix it to be matrix
-    P = np.asarray(P)
-    if P.ndim == 1:
-        P = P[np.newaxis, :]
-
-    # Get vector of rotation k and angle theta
-    n0 = n0 / np.linalg.norm(n0)
-    n1 = n1 / np.linalg.norm(n1)
-    k = np.cross(n0, n1)
-    P_rot = np.zeros((len(P), 3))
-    if np.linalg.norm(k) != 0:
-        k = k / np.linalg.norm(k)
-        theta = np.arccos(np.dot(n0, n1))
-
-        # Compute rotated points
-        for i in range(len(P)):
-            P_rot[i] = (
-                P[i] * np.cos(theta) + np.cross(k, P[i]) * np.sin(theta) + k * np.dot(k, P[i]) * (1 - np.cos(theta))
-            )
-    else:
-        P_rot = P
-    return P_rot
+import numpy as np
 
 class Plane:
     def __init__(self):
         self.loss = 0
-        self.center = np.array([])
-        self.inliers = np.array([])
-        self.normal = np.array([])
+        self.center = []
+        self.inliers = []
+        self.normal = []
 
-    def fit(self, pts, thresh=0.1):
+    def fit(self, pc, eps=0.1):
+        pts = np.asarray(pc.points)
         # Find PCA plane
         # Normal and center
         covariance_matrix = np.cov(pts.T)
@@ -95,7 +29,7 @@ class Plane:
             equation[0] * pts[:, 0] + equation[1] * pts[:, 1] + equation[2] * pts[:, 2] + equation[3]
         ) /  np.sqrt(equation[0] ** 2 + equation[1] ** 2 + equation[2] ** 2)
         
-        thresh = np.max(dist_pt)*0.1
+        thresh = np.max(dist_pt)*eps
         self.inliers = np.where(np.abs(dist_pt) <= thresh)[0]
 
         self.loss = np.mean(np.abs(dist_pt))
@@ -110,15 +44,15 @@ class Sphere:
         self.center = []
         self.radius = 0
 
-    def fit(self, pts, p=0.05, k=0.3, maxIteration=100):
-        
+    def fit(self, pc, eps=0.05, sample_ratio=0.3, maxIteration=100):
+        pts = np.asarray(pc.points)
         n_points = pts.shape[0]
         best_inliers = self.inliers
 
         for it in range(maxIteration):
 
-            # Samples 4 random points
-            N = int(k*n_points)
+            # Samples random points
+            N = int(sample_ratio*n_points)
             id_samples = random.sample(range(0, n_points), N)
             pt_samples = pts[id_samples]
 
@@ -137,7 +71,7 @@ class Sphere:
             f[:,0] = (spX*spX) + (spY*spY) + (spZ*spZ)
             
             # Now we calculate the center and radius
-            C, residules, rank, singval = np.linalg.lstsq(A,f)
+            C, residules, rank, singval = np.linalg.lstsq(A, f, rcond=None)
             center = np.array([C[0,0], C[1,0], C[2,0]])
             t = (C[0]*C[0])+(C[1]*C[1])+(C[2]*C[2])+C[3]
             radius = np.sqrt(t)[0]
@@ -148,7 +82,7 @@ class Sphere:
             dist_pt = np.linalg.norm(dist_pt, axis=1)
 
             # Select indexes where distance is biggers than the threshold
-            thresh = p*radius
+            thresh = eps*radius
             pt_id_inliers = np.where(np.abs(dist_pt - radius) <= thresh)[0]
 
             if len(pt_id_inliers) > len(best_inliers):
@@ -159,3 +93,111 @@ class Sphere:
 
 
         return self.center, self.radius, self.inliers
+
+
+class Cone:
+    def __init__(self):
+        self.apex = []
+        self.axis_vector = []
+        self.theta = 0
+        self.mean_dist = 0
+    
+    @staticmethod
+    def get_angle(u, v):
+        t = np.linalg.norm(u) * np.linalg.norm(v)
+        return np.abs(np.arccos(np.dot(u, v) / t))
+
+    @staticmethod
+    def calculate_distances_to_cone(apex, axis_vector, theta, points):
+        U = points - apex
+        U /= np.linalg.norm(U, axis=1, keepdims=True)
+        v = axis_vector / np.linalg.norm(axis_vector)
+
+        angles = np.abs(np.arccos(np.dot(U, v)))
+        angle_errors = np.abs(angles - theta)
+        mask = angle_errors > (np.pi / 2)
+
+        distances_to_apex = np.sqrt(np.sum((points - apex)**2, axis=1))
+        res = distances_to_apex * np.sin(angle_errors)
+        res = mask * distances_to_apex + (1 - mask) * res
+        return res
+
+    @staticmethod
+    def calculate_ratio(apex, axis_vector, theta, points, eps=1e-3):
+        ds = Cone.calculate_distances_to_cone(apex, axis_vector, theta, points)
+        return np.sum(ds < eps) / ds.shape[0]
+
+    @staticmethod
+    def calculate_cone_params_simple(points, normals):
+        # Apex
+        B = np.zeros(3)
+        B[:] = normals[:,0] * points[:,0] + normals[:,1] * points[:,1] + normals[:,2] * points[:,2]
+        try:
+            apex = np.linalg.solve(normals, B) 
+        except:
+            return None, None, None
+
+        # axis normal
+        P = [None, None, None]
+        for i in range(3):
+            P[i] = points[i] - apex
+            P[i] /= np.linalg.norm(P[i])
+        u = P[1] - P[0]
+        v = P[2] - P[0]
+        axis_vector = np.cross(u, v)
+        axis_vector /= np.linalg.norm(axis_vector)
+
+        # half the aperture - theta
+        theta = Cone.get_angle(points[0] - apex, axis_vector)
+        if theta > np.pi / 2:
+            return None, None, None
+
+        return apex, axis_vector, theta
+
+    def fit(self, pc, eps=1e-3, sample_ratio=1.0, min_points_count=1e9, maxIteration=1000):
+        pc.estimate_normals()
+        pc.normalize_normals()
+        all_points = np.asarray(pc.points)
+        all_normals = np.asarray(pc.normals)
+        
+        mn = all_points.min(axis=0)
+        mx = all_points.max(axis=0)
+        L = np.sqrt(np.sum((mx - mn)**2))
+        
+        
+        best_ratio = 0
+        # best_mean_dist = np.inf
+        best_apex = None
+        best_axis_vector = None
+        best_theta = None
+
+        if all_points.shape[0] <= min_points_count:
+            sampled_points = np.copy(all_points)
+        else:
+            n_sample = int(max(all_points.shape[0] * sample_ratio, min_points_count))
+            indices = random.sample(list(range(all_points.shape[0])), n_sample)
+            sampled_points = all_points[indices]
+
+        count = 0
+        while count < maxIteration:
+            # Calculate params
+            indices = np.random.choice(all_points.shape[0], 3, replace=False)
+            normals = all_normals[indices] # sample three points, normals
+            points = all_points[indices]
+
+            apex, axis_vector, theta = Cone.calculate_cone_params_simple(points, normals)
+            if apex is None:
+                continue
+            
+            count += 1
+            ratio = Cone.calculate_ratio(apex, axis_vector, theta, sampled_points, eps=eps)
+            # mean_dist = calculate_distances_to_cone(apex, axis_vector, theta, sampled_points).mean()
+            if best_ratio < ratio:
+            # if best_mean_dist > mean_dist:
+                best_ratio = ratio
+                # best_mean_dist = mean_dist
+                best_apex = apex
+                best_axis_vector = axis_vector
+                best_theta = theta
+
+        return best_apex, best_axis_vector, best_theta, best_ratio
